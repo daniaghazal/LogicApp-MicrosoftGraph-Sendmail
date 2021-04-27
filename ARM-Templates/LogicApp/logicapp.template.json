@@ -1,0 +1,242 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_send_email_logic_app_name": {
+            "type": "String"
+        },
+        "connections_keyvault_externalid": {
+            "type": "String"
+        }
+    },
+    "variables": {
+        "location": "[resourceGroup().location]",
+        "subscriptionId": "[subscription().subscriptionId]",
+        "tenantId": "[subscription().tenantId]",
+        "keyVaultApiId": "[concat('/subscriptions/', variables('subscriptionId'), '/providers/Microsoft.Web/locations/', variables('location'),'/managedApis/keyvault')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_send_email_logic_app_name')]",
+            "location": "canadacentral",
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "manual": {
+                            "type": "Request",
+                            "kind": "Http",
+                            "inputs": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Get_clientId_from_Key_Vault": {
+                            "runAfter": {
+                                "Initialize_clientSecret": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['keyvault']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/secrets/@{encodeURIComponent('client-id')}/value"
+                            }
+                        },
+                        "Get_clientSecret_from_Key_Vault": {
+                            "runAfter": {
+                                "Get_clientId_from_Key_Vault": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['keyvault']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/secrets/@{encodeURIComponent('client-secret')}/value"
+                            }
+                        },
+                        "HTTP_-_Get_Bearer_Token": {
+                            "runAfter": {
+                                "Initialize_tenantId": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "body": "client_id=@{variables('clientId')}&scope=https://graph.microsoft.com/.default&client_secret=@{variables('clientSecret')}&grant_type=client_credentials",
+                                "headers": {
+                                    "Content-Type": "application/x-www-form-urlencoded"
+                                },
+                                "method": "POST",
+                                "uri": "https://login.microsoftonline.com/@{variables('tenantId')}/oauth2/v2.0/token"
+                            }
+                        },
+                        "HTTP_-_SendMail_using_Microsoft_Graph_API": {
+                            "runAfter": {
+                                "Parse_JSON": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http",
+                            "inputs": {
+                                "body": {
+                                    "message": {
+                                        "body": {
+                                            "content": "The new cafeteria is open.",
+                                            "contentType": "Text"
+                                        },
+                                        "subject": "Meet for lunch?",
+                                        "toRecipients": [
+                                            {
+                                                "emailAddress": {
+                                                    "address": "daniaghazal@contoso.com"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    "saveToSentItems": "false"
+                                },
+                                "headers": {
+                                    "Authorization": "@{concat('Bearer ', body('Parse_JSON')?['access_token'])}",
+                                    "Content-type": "application/json"
+                                },
+                                "method": "POST",
+                                "uri": "https://graph.microsoft.com/v1.0/users/daniaghazal@contoso.com/sendMail"
+                            }
+                        },
+                        "Initialize_clientId": {
+                            "runAfter": {},
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "clientId",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_clientSecret": {
+                            "runAfter": {
+                                "Initialize_clientId": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "clientSecret",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        },
+                        "Initialize_tenantId": {
+                            "runAfter": {
+                                "Set_variable_clientSecret": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "tenantId",
+                                        "type": "string",
+                                        "value": "[variables('tenantId')]"
+                                    }
+                                ]
+                            }
+                        },
+                        "Parse_JSON": {
+                            "runAfter": {
+                                "HTTP_-_Get_Bearer_Token": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ParseJson",
+                            "inputs": {
+                                "content": "@body('HTTP_-_Get_Bearer_Token')",
+                                "schema": {
+                                    "properties": {
+                                        "access_token": {
+                                            "type": "string"
+                                        },
+                                        "expires_in": {
+                                            "type": "integer"
+                                        },
+                                        "ext_expires_in": {
+                                            "type": "integer"
+                                        },
+                                        "token_type": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "Set_variable_clientId": {
+                            "runAfter": {
+                                "Get_clientSecret_from_Key_Vault": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "SetVariable",
+                            "inputs": {
+                                "name": "clientId",
+                                "value": "@body('Get_clientId_from_Key_Vault')?['value']"
+                            }
+                        },
+                        "Set_variable_clientSecret": {
+                            "runAfter": {
+                                "Set_variable_clientId": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "SetVariable",
+                            "inputs": {
+                                "name": "clientSecret",
+                                "value": "@body('Get_clientSecret_from_Key_Vault')?['value']"
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "keyvault": {
+                                "connectionId": "[parameters('connections_keyvault_externalid')]",
+                                "connectionName": "keyvault",
+                                "id": "[variables('keyVaultApiId')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
